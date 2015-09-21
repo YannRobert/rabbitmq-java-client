@@ -124,11 +124,13 @@ public class ConnectionFactory implements Cloneable {
             if (connectionTimeout < 0) {
                 throw new IllegalArgumentException("TCP connection timeout cannot be negative");
             }
-            if (handshakeTimeout < 0) {
-                throw new IllegalArgumentException("handshake timeout cannot be negative");
-            }
-            if (connectionTimeout > handshakeTimeout) {
-                throw new IllegalArgumentException("TCP connection timeout cannot be greater than handshake timeout");
+            if (isSSL()) {
+                if (handshakeTimeout < 0) {
+                    throw new IllegalArgumentException("handshake timeout cannot be negative");
+                }
+                if (connectionTimeout > handshakeTimeout) {
+                    throw new IllegalArgumentException("TCP connection timeout cannot be greater than handshake timeout");
+                }
             }
             if (exceptionHandler == null) {
                 throw new IllegalArgumentException("exception handler cannot be null!");
