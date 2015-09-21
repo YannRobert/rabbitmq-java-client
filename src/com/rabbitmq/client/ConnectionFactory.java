@@ -16,30 +16,24 @@
 
 package com.rabbitmq.client;
 
+import com.rabbitmq.client.impl.*;
+import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
+
+import javax.net.SocketFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URLDecoder;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URLDecoder;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeoutException;
-
-import javax.net.SocketFactory;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-
-import com.rabbitmq.client.impl.AMQConnection;
-import com.rabbitmq.client.impl.ConnectionParams;
-import com.rabbitmq.client.impl.DefaultExceptionHandler;
-import com.rabbitmq.client.impl.FrameHandler;
-import com.rabbitmq.client.impl.FrameHandlerFactory;
-import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
 
 /**
  * Convenience "factory" class to facilitate opening a {@link Connection} to an AMQP broker.
@@ -84,45 +78,99 @@ public class ConnectionFactory implements Cloneable {
 
     /** The default SSL protocol */
     private static final String DEFAULT_SSL_PROTOCOL = "TLSv1";
+    
+    
+    public static class ConnectionFactoryConfig implements Cloneable {
+        public String username                       = DEFAULT_USER;
+        public String password                       = DEFAULT_PASS;
+        public String virtualHost                    = DEFAULT_VHOST;
+        public String host                           = DEFAULT_HOST;
+        public int port                              = USE_DEFAULT_PORT;
+        public int requestedChannelMax               = DEFAULT_CHANNEL_MAX;
+        public int requestedFrameMax                 = DEFAULT_FRAME_MAX;
+        public int requestedHeartbeat                = DEFAULT_HEARTBEAT;
+        public int connectionTimeout                 = DEFAULT_CONNECTION_TIMEOUT;
+        public int handshakeTimeout                  = DEFAULT_HANDSHAKE_TIMEOUT;
+        public int shutdownTimeout                   = DEFAULT_SHUTDOWN_TIMEOUT;
+        public Map<String, Object> _clientProperties = AMQConnection.defaultClientProperties();
 
-    private String username                       = DEFAULT_USER;
-    private String password                       = DEFAULT_PASS;
-    private String virtualHost                    = DEFAULT_VHOST;
-    private String host                           = DEFAULT_HOST;
-    private int port                              = USE_DEFAULT_PORT;
-    private int requestedChannelMax               = DEFAULT_CHANNEL_MAX;
-    private int requestedFrameMax                 = DEFAULT_FRAME_MAX;
-    private int requestedHeartbeat                = DEFAULT_HEARTBEAT;
-    private int connectionTimeout                 = DEFAULT_CONNECTION_TIMEOUT;
-    private int handshakeTimeout                  = DEFAULT_HANDSHAKE_TIMEOUT;
-    private int shutdownTimeout                   = DEFAULT_SHUTDOWN_TIMEOUT;
-    private Map<String, Object> _clientProperties = AMQConnection.defaultClientProperties();
-    private SocketFactory factory                 = SocketFactory.getDefault();
-    private SaslConfig saslConfig                 = DefaultSaslConfig.PLAIN;
+        public SaslConfig saslConfig                 = DefaultSaslConfig.PLAIN;
+
+        public ThreadFactory threadFactory           = Executors.defaultThreadFactory();
+        // minimises the number of threads rapid closure of many
+        // connections uses, see rabbitmq/rabbitmq-java-client#86
+        public ExecutorService shutdownExecutor;
+        public ExceptionHandler exceptionHandler     = new DefaultExceptionHandler();
+
+        public boolean automaticRecovery             = false;
+        public boolean topologyRecovery              = true;
+
+        // long is used to make sure the users can use both ints
+        // and longs safely. It is unlikely that anybody'd need
+        // to use recovery intervals > Integer.MAX_VALUE in practice.
+        public long networkRecoveryInterval          = 5000;
+
+
+        private SocketFactory socketFactory                 = SocketFactory.getDefault();
+        private SocketConfigurator socketConf         = new DefaultSocketConfigurator();
+
+        public FrameHandlerFactory frameHandlerFactory;
+
+        public boolean isSSL(){
+            return socketFactory instanceof SSLSocketFactory;
+        }
+
+        public void validate() {
+            if (connectionTimeout < 0) {
+                throw new IllegalArgumentException("TCP connection timeout cannot be negative");
+            }
+            if (handshakeTimeout < 0) {
+                throw new IllegalArgumentException("handshake timeout cannot be negative");
+            }
+            if (connectionTimeout > handshakeTimeout) {
+                throw new IllegalArgumentException("TCP connection timeout cannot be greater than handshake timeout");
+            }
+            if (exceptionHandler == null) {
+                throw new IllegalArgumentException("exception handler cannot be null!");
+            }
+        }
+        
+        public ConnectionFactoryConfig copy() {
+            try {
+                return (ConnectionFactoryConfig) this.clone();
+            } catch (CloneNotSupportedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        
+        public void destroy() {
+            this.shutdownExecutor.shutdown();
+        }
+
+    }
+    
+    private ConnectionFactoryConfig config = new ConnectionFactoryConfig();
+    private ConnectionFactoryConfig validatedConfig = null;
+
     private ExecutorService sharedExecutor;
-    private ThreadFactory threadFactory           = Executors.defaultThreadFactory();
-    // minimises the number of threads rapid closure of many
-    // connections uses, see rabbitmq/rabbitmq-java-client#86
-    private ExecutorService shutdownExecutor;
-    private SocketConfigurator socketConf         = new DefaultSocketConfigurator();
-    private ExceptionHandler exceptionHandler     = new DefaultExceptionHandler();
-
-    private boolean automaticRecovery             = false;
-    private boolean topologyRecovery              = true;
-
-    // long is used to make sure the users can use both ints
-    // and longs safely. It is unlikely that anybody'd need
-    // to use recovery intervals > Integer.MAX_VALUE in practice.
-    private long networkRecoveryInterval          = 5000;
-
+    
+    
+    private void propertyChanged() {
+        if (validatedConfig != null) {
+            validatedConfig.destroy();
+            validatedConfig = null;
+        }
+    }
+    
     /** @return the default host to use for connections */
     public String getHost() {
-        return host;
+        return config.host;
     }
 
     /** @param host the default host to use for connections */
     public void setHost(String host) {
-        this.host = host;
+        propertyChanged();
+        config.host = host;
     }
 
     public static int portOrDefault(int port, boolean ssl) {
@@ -133,7 +181,7 @@ public class ConnectionFactory implements Cloneable {
 
     /** @return the default port to use for connections */
     public int getPort() {
-        return portOrDefault(port, isSSL());
+        return portOrDefault(config.port, isSSL());
     }
 
     /**
@@ -141,7 +189,8 @@ public class ConnectionFactory implements Cloneable {
      * @param port the default port to use for connections
      */
     public void setPort(int port) {
-        this.port = port;
+        propertyChanged();
+        config.port = port;
     }
 
     /**
@@ -149,7 +198,7 @@ public class ConnectionFactory implements Cloneable {
      * @return the AMQP user name to use when connecting to the broker
      */
     public String getUsername() {
-        return this.username;
+        return config.username;
     }
 
     /**
@@ -157,7 +206,8 @@ public class ConnectionFactory implements Cloneable {
      * @param username the AMQP user name to use when connecting to the broker
      */
     public void setUsername(String username) {
-        this.username = username;
+        propertyChanged();
+        config.username = username;
     }
 
     /**
@@ -165,7 +215,7 @@ public class ConnectionFactory implements Cloneable {
      * @return the password to use when connecting to the broker
      */
     public String getPassword() {
-        return this.password;
+        return config.password;
     }
 
     /**
@@ -173,7 +223,8 @@ public class ConnectionFactory implements Cloneable {
      * @param password the password to use when connecting to the broker
      */
     public void setPassword(String password) {
-        this.password = password;
+        propertyChanged();
+        config.password = password;
     }
 
     /**
@@ -181,7 +232,7 @@ public class ConnectionFactory implements Cloneable {
      * @return the virtual host to use when connecting to the broker
      */
     public String getVirtualHost() {
-        return this.virtualHost;
+        return config.virtualHost;
     }
 
     /**
@@ -189,7 +240,8 @@ public class ConnectionFactory implements Cloneable {
      * @param virtualHost the virtual host to use when connecting to the broker
      */
     public void setVirtualHost(String virtualHost) {
-        this.virtualHost = virtualHost;
+        propertyChanged();
+        config.virtualHost = virtualHost;
     }
 
 
@@ -281,7 +333,7 @@ public class ConnectionFactory implements Cloneable {
      * @return the initially requested maximum channel number; zero for unlimited
      */
     public int getRequestedChannelMax() {
-        return this.requestedChannelMax;
+        return config.requestedChannelMax;
     }
 
     /**
@@ -289,7 +341,8 @@ public class ConnectionFactory implements Cloneable {
      * @param requestedChannelMax initially requested maximum channel number; zero for unlimited
      */
     public void setRequestedChannelMax(int requestedChannelMax) {
-        this.requestedChannelMax = requestedChannelMax;
+        propertyChanged();
+        config.requestedChannelMax = requestedChannelMax;
     }
 
     /**
@@ -297,7 +350,7 @@ public class ConnectionFactory implements Cloneable {
      * @return the initially requested maximum frame size, in octets; zero for unlimited
      */
     public int getRequestedFrameMax() {
-        return this.requestedFrameMax;
+        return config.requestedFrameMax;
     }
 
     /**
@@ -305,7 +358,8 @@ public class ConnectionFactory implements Cloneable {
      * @param requestedFrameMax initially requested maximum frame size, in octets; zero for unlimited
      */
     public void setRequestedFrameMax(int requestedFrameMax) {
-        this.requestedFrameMax = requestedFrameMax;
+        propertyChanged();
+        config.requestedFrameMax = requestedFrameMax;
     }
 
     /**
@@ -313,7 +367,7 @@ public class ConnectionFactory implements Cloneable {
      * @return the initially requested heartbeat interval, in seconds; zero for none
      */
     public int getRequestedHeartbeat() {
-        return this.requestedHeartbeat;
+        return config.requestedHeartbeat;
     }
 
     /**
@@ -321,14 +375,8 @@ public class ConnectionFactory implements Cloneable {
      * @param timeout connection TCP establishment timeout in milliseconds; zero for infinite
      */
     public void setConnectionTimeout(int timeout) {
-        if(timeout < 0) {
-            throw new IllegalArgumentException("TCP connection timeout cannot be negative");
-        }
-        if(timeout > handshakeTimeout) {
-            throw new IllegalArgumentException("TCP connection timeout cannot be greater than handshake timeout");
-        } else {
-            this.connectionTimeout = timeout;
-        }
+        propertyChanged();
+        config.connectionTimeout = timeout;
     }
 
     /**
@@ -336,7 +384,7 @@ public class ConnectionFactory implements Cloneable {
      * @return the TCP connection timeout, in milliseconds; zero for infinite
      */
     public int getConnectionTimeout() {
-        return this.connectionTimeout;
+        return config.connectionTimeout;
     }
 
     /**
@@ -344,7 +392,7 @@ public class ConnectionFactory implements Cloneable {
      * @return the AMQP0-9-1 protocol handshake timeout, in milliseconds
      */
     public int getHandshakeTimeout() {
-        return handshakeTimeout;
+        return config.handshakeTimeout;
     }
 
     /**
@@ -352,14 +400,8 @@ public class ConnectionFactory implements Cloneable {
      * @param timeout the AMQP0-9-1 protocol handshake timeout, in milliseconds
      */
     public void setHandshakeTimeout(int timeout) {
-        if(timeout < 0) {
-            throw new IllegalArgumentException("handshake timeout cannot be negative");
-        }
-        if(connectionTimeout != 0 && timeout < connectionTimeout) {
-            throw new IllegalArgumentException("handshake timeout cannot be lower than TCP connection timeout");
-        } else {
-            this.handshakeTimeout = timeout;
-        }
+        propertyChanged();
+        config.handshakeTimeout = timeout;
     }
 
     /**
@@ -371,7 +413,8 @@ public class ConnectionFactory implements Cloneable {
      * @param shutdownTimeout shutdown timeout in milliseconds; zero for infinite; default 10000
      */
     public void setShutdownTimeout(int shutdownTimeout) {
-        this.shutdownTimeout = shutdownTimeout;
+        propertyChanged();
+        config.shutdownTimeout = shutdownTimeout;
     }
 
     /**
@@ -379,7 +422,7 @@ public class ConnectionFactory implements Cloneable {
      * @return the shutdown timeout, in milliseconds; zero for infinite
      */
     public int getShutdownTimeout() {
-        return shutdownTimeout;
+        return config.shutdownTimeout;
     }
 
     /**
@@ -388,7 +431,8 @@ public class ConnectionFactory implements Cloneable {
      * @see <a href="http://rabbitmq.com/heartbeats.html">RabbitMQ Heartbeats Guide</a>
      */
     public void setRequestedHeartbeat(int requestedHeartbeat) {
-        this.requestedHeartbeat = requestedHeartbeat;
+        propertyChanged();
+        config.requestedHeartbeat = requestedHeartbeat;
     }
 
     /**
@@ -401,7 +445,7 @@ public class ConnectionFactory implements Cloneable {
      * @see #setClientProperties
      */
     public Map<String, Object> getClientProperties() {
-        return _clientProperties;
+        return config._clientProperties;
     }
 
     /**
@@ -411,7 +455,8 @@ public class ConnectionFactory implements Cloneable {
      * @see #getClientProperties
      */
     public void setClientProperties(Map<String, Object> clientProperties) {
-        _clientProperties = clientProperties;
+        propertyChanged();
+        config._clientProperties = clientProperties;
     }
 
     /**
@@ -420,7 +465,7 @@ public class ConnectionFactory implements Cloneable {
      * @see com.rabbitmq.client.SaslConfig
      */
     public SaslConfig getSaslConfig() {
-        return saslConfig;
+        return config.saslConfig;
     }
 
     /**
@@ -429,14 +474,15 @@ public class ConnectionFactory implements Cloneable {
      * @see com.rabbitmq.client.SaslConfig
      */
     public void setSaslConfig(SaslConfig saslConfig) {
-        this.saslConfig = saslConfig;
+        propertyChanged();
+        config.saslConfig = saslConfig;
     }
 
     /**
      * Retrieve the socket factory used to make connections with.
      */
     public SocketFactory getSocketFactory() {
-        return this.factory;
+        return config.socketFactory;
     }
 
     /**
@@ -447,7 +493,8 @@ public class ConnectionFactory implements Cloneable {
      * @see #useSslProtocol
      */
     public void setSocketFactory(SocketFactory factory) {
-        this.factory = factory;
+        propertyChanged();
+        config.socketFactory = factory;
     }
 
     /**
@@ -457,7 +504,7 @@ public class ConnectionFactory implements Cloneable {
      */
     @SuppressWarnings("unused")
     public SocketConfigurator getSocketConfigurator() {
-        return socketConf;
+        return config.socketConf;
     }
 
     /**
@@ -468,7 +515,8 @@ public class ConnectionFactory implements Cloneable {
      * @param socketConfigurator the configurator to use
      */
     public void setSocketConfigurator(SocketConfigurator socketConfigurator) {
-        this.socketConf = socketConfigurator;
+        propertyChanged();
+        config.socketConf = socketConfigurator;
     }
 
     /**
@@ -479,11 +527,12 @@ public class ConnectionFactory implements Cloneable {
      * It's developer's responsibility to shut down the executor
      * when it is no longer needed.
      *
-     * @param executor executor service to be used for
+     * @param sharedExecutor executor service to be used for
      *                 consumer operation
      */
-    public void setSharedExecutor(ExecutorService executor) {
-        this.sharedExecutor = executor;
+    public void setSharedExecutor(ExecutorService sharedExecutor) {
+        propertyChanged();
+        this.sharedExecutor = sharedExecutor;
     }
 
     /**
@@ -493,11 +542,12 @@ public class ConnectionFactory implements Cloneable {
      * It's developer's responsibility to shut down the executor
      * when it is no longer needed.
      *
-     * @param executor executor service to be used for
+     * @param shutdownExecutor executor service to be used for
      *                 connection shutdown
      */
-    public void setShutdownExecutor(ExecutorService executor) {
-        this.shutdownExecutor = executor;
+    public void setShutdownExecutor(ExecutorService shutdownExecutor) {
+        propertyChanged();
+        config.shutdownExecutor = shutdownExecutor;
     }
 
     /**
@@ -505,15 +555,20 @@ public class ConnectionFactory implements Cloneable {
      * @see ThreadFactory
      */
     public ThreadFactory getThreadFactory() {
-        return threadFactory;
+        return config.threadFactory;
     }
 
     /**
      * Set the thread factory used to instantiate new threads.
      * @see ThreadFactory
+     * @see #setSharedExecutor
+     * @see #setShutdownExecutor
+     * @deprecated use #setSharedExecutor and #setShutdownExecutor instead
      */
+    @Deprecated
     public void setThreadFactory(ThreadFactory threadFactory) {
-        this.threadFactory = threadFactory;
+        propertyChanged();
+        config.threadFactory = threadFactory;
     }
 
     /**
@@ -522,7 +577,7 @@ public class ConnectionFactory implements Cloneable {
     * @see com.rabbitmq.client.ExceptionHandler
     */
     public ExceptionHandler getExceptionHandler() {
-        return exceptionHandler;
+        return config.exceptionHandler;
     }
 
     /**
@@ -530,14 +585,12 @@ public class ConnectionFactory implements Cloneable {
      * @see com.rabbitmq.client.ExceptionHandler
      */
     public void setExceptionHandler(ExceptionHandler exceptionHandler) {
-        if (exceptionHandler == null) {
-          throw new IllegalArgumentException("exception handler cannot be null!");
-        }
-        this.exceptionHandler = exceptionHandler;
+        propertyChanged();
+        config.exceptionHandler = exceptionHandler;
     }
 
     public boolean isSSL(){
-        return getSocketFactory() instanceof SSLSocketFactory;
+        return config.isSSL();
     }
 
     /**
@@ -592,7 +645,7 @@ public class ConnectionFactory implements Cloneable {
      * @see <a href="http://www.rabbitmq.com/api-guide.html#recovery">Automatic Recovery</a>
      */
     public boolean isAutomaticRecoveryEnabled() {
-        return automaticRecovery;
+        return config.automaticRecovery;
     }
 
     /**
@@ -601,7 +654,8 @@ public class ConnectionFactory implements Cloneable {
      * @see <a href="http://www.rabbitmq.com/api-guide.html#recovery">Automatic Recovery</a>
      */
     public void setAutomaticRecoveryEnabled(boolean automaticRecovery) {
-        this.automaticRecovery = automaticRecovery;
+        propertyChanged();
+        config.automaticRecovery = automaticRecovery;
     }
 
     /**
@@ -611,7 +665,7 @@ public class ConnectionFactory implements Cloneable {
      */
     @SuppressWarnings("unused")
     public boolean isTopologyRecoveryEnabled() {
-        return topologyRecovery;
+        return config.topologyRecovery;
     }
 
     /**
@@ -620,11 +674,18 @@ public class ConnectionFactory implements Cloneable {
      * @see <a href="http://www.rabbitmq.com/api-guide.html#recovery">Automatic Recovery</a>
      */
     public void setTopologyRecoveryEnabled(boolean topologyRecovery) {
-        this.topologyRecovery = topologyRecovery;
+        propertyChanged();
+        config.topologyRecovery = topologyRecovery;
     }
 
+    /**
+     * TODO : to be removed
+     * @deprecated to be removed in future release. this method is not called anymore
+     */
+    @Deprecated
     protected FrameHandlerFactory createFrameHandlerFactory() throws IOException {
-        return new FrameHandlerFactory(connectionTimeout, factory, socketConf, isSSL());
+        ConnectionFactoryConfig c = validatedConfig;
+        return new FrameHandlerFactory(c.connectionTimeout, c.socketFactory, c.socketConf, c.isSSL());
     }
 
     /**
@@ -659,10 +720,8 @@ public class ConnectionFactory implements Cloneable {
      */
     public Connection newConnection(ExecutorService executor, Address[] addrs)
             throws IOException, TimeoutException {
-        // make sure we respect the provided thread factory
-        maybeInitializeShutdownExecutor();
-        FrameHandlerFactory fhFactory = createFrameHandlerFactory();
         ConnectionParams params = params(executor);
+        FrameHandlerFactory fhFactory = params.getFrameHandlerFactory();
 
         if (isAutomaticRecoveryEnabled()) {
             // see com.rabbitmq.client.impl.recovery.RecoveryAwareAMQConnectionFactory#newConnection
@@ -688,22 +747,27 @@ public class ConnectionFactory implements Cloneable {
     public ConnectionParams params(ExecutorService consumerWorkServiceExecutor) {
         ConnectionParams result = new ConnectionParams();
 
-        result.setUsername(username);
-        result.setPassword(password);
+        ConnectionFactoryConfig localValidatedConfig = validatedConfig;
+        if (localValidatedConfig == null) {
+            ConnectionFactoryConfig candidateConfig = config.copy();
+            candidateConfig.validate();
+            if (candidateConfig.shutdownExecutor == null) {
+                /**
+                 * Lazily initializes shutdown executor service. This is necessary
+                 * to make sure the default executor uses the thread factory that
+                 * may be user-provided and crucially important in certain environments,
+                 * e.g. Google App Engine or JEE application servers.
+                 */
+                candidateConfig.shutdownExecutor = Executors.newFixedThreadPool(4, candidateConfig.threadFactory);
+            }
+            candidateConfig.frameHandlerFactory = new FrameHandlerFactory(candidateConfig.connectionTimeout, candidateConfig.socketFactory, candidateConfig.socketConf, isSSL());
+            
+            localValidatedConfig = candidateConfig;
+            validatedConfig = localValidatedConfig;
+        }
+
+        result.setConnectionFactoryConfig(localValidatedConfig);
         result.setConsumerWorkServiceExecutor(consumerWorkServiceExecutor);
-        result.setVirtualHost(virtualHost);
-        result.setClientProperties(getClientProperties());
-        result.setRequestedFrameMax(requestedFrameMax);
-        result.setRequestedChannelMax(requestedChannelMax);
-        result.setShutdownTimeout(shutdownTimeout);
-        result.setSaslConfig(saslConfig);
-        result.setNetworkRecoveryInterval(networkRecoveryInterval);
-        result.setTopologyRecovery(topologyRecovery);
-        result.setExceptionHandler(exceptionHandler);
-        result.setThreadFactory(threadFactory);
-        result.setHandshakeTimeout(handshakeTimeout);
-        result.setRequestedHeartbeat(requestedHeartbeat);
-        result.setShutdownExecutor(shutdownExecutor);
         return result;
     }
 
@@ -718,9 +782,7 @@ public class ConnectionFactory implements Cloneable {
      * @throws IOException if it encounters a problem
      */
     public Connection newConnection() throws IOException, TimeoutException {
-        return newConnection(this.sharedExecutor,
-                             new Address[] {new Address(getHost(), getPort())}
-                            );
+        return newConnection(new Address[] {new Address(getHost(), getPort())});
     }
 
     /**
@@ -740,21 +802,13 @@ public class ConnectionFactory implements Cloneable {
                             );
     }
 
-    /**
-     * Lazily initializes shutdown executor service. This is necessary
-     * to make sure the default executor uses the thread factory that
-     * may be user-provided and crucially important in certain environments,
-     * e.g. Google App Engine or JEE application servers.
-     */
-    protected void maybeInitializeShutdownExecutor() {
-        if(shutdownExecutor == null) {
-            shutdownExecutor = Executors.newFixedThreadPool(4, threadFactory);
-        }
-    }
 
     @Override public ConnectionFactory clone(){
         try {
-            return (ConnectionFactory)super.clone();
+            ConnectionFactory clone = (ConnectionFactory) super.clone();
+            clone.config = this.config.copy();
+            clone.validatedConfig = null;
+            return clone;
         } catch (CloneNotSupportedException e) {
             throw new Error(e);
         }
@@ -765,7 +819,7 @@ public class ConnectionFactory implements Cloneable {
      * @return how long will automatic recovery wait before attempting to reconnect, in ms; default is 5000
      */
     public long getNetworkRecoveryInterval() {
-        return networkRecoveryInterval;
+        return config.networkRecoveryInterval;
     }
 
     /**
@@ -773,7 +827,8 @@ public class ConnectionFactory implements Cloneable {
      * @param networkRecoveryInterval how long will automatic recovery wait before attempting to reconnect, in ms
      */
     public void setNetworkRecoveryInterval(int networkRecoveryInterval) {
-        this.networkRecoveryInterval = networkRecoveryInterval;
+        propertyChanged();
+        config.networkRecoveryInterval = networkRecoveryInterval;
     }
 
     /**
@@ -781,6 +836,7 @@ public class ConnectionFactory implements Cloneable {
      * @param networkRecoveryInterval how long will automatic recovery wait before attempting to reconnect, in ms
      */
     public void setNetworkRecoveryInterval(long networkRecoveryInterval) {
-        this.networkRecoveryInterval = networkRecoveryInterval;
+        propertyChanged();
+        config.networkRecoveryInterval = networkRecoveryInterval;
     }
 }

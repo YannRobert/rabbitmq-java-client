@@ -1,5 +1,6 @@
 package com.rabbitmq.client.impl;
 
+import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.ExceptionHandler;
 import com.rabbitmq.client.SaslConfig;
 
@@ -8,151 +9,87 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadFactory;
 
 public class ConnectionParams {
-    private String username;
-    private String password;
+
     private ExecutorService consumerWorkServiceExecutor;
-    private ExecutorService shutdownExecutor;
-    private String virtualHost;
-    private Map<String, Object> clientProperties;
-    private int requestedFrameMax;
-    private int requestedChannelMax;
-    private int requestedHeartbeat;
-    private int handshakeTimeout;
-    private int shutdownTimeout;
-    private SaslConfig saslConfig;
-    private long networkRecoveryInterval;
-    private boolean topologyRecovery;
+    private ConnectionFactory.ConnectionFactoryConfig connectionFactoryConfig;
 
-    private ExceptionHandler exceptionHandler;
-    private ThreadFactory threadFactory;
-
-    public ConnectionParams() {}
-
-    public String getUsername() {
-        return username;
-    }
-
-    public String getPassword() {
-        return password;
+    public ConnectionParams() {
     }
 
     public ExecutorService getConsumerWorkServiceExecutor() {
         return consumerWorkServiceExecutor;
     }
-
-    public String getVirtualHost() {
-        return virtualHost;
-    }
-
-    public Map<String, Object> getClientProperties() {
-        return clientProperties;
-    }
-
-    public int getRequestedFrameMax() {
-        return requestedFrameMax;
-    }
-
-    public int getRequestedChannelMax() {
-        return requestedChannelMax;
-    }
-
-    public int getRequestedHeartbeat() {
-        return requestedHeartbeat;
-    }
-
-    public int getHandshakeTimeout() {
-        return handshakeTimeout;
-    }
-
-    public void setHandshakeTimeout(int timeout) {
-      this.handshakeTimeout = timeout;
-    }
-
-    public int getShutdownTimeout() {
-        return shutdownTimeout;
-    }
-
-    public SaslConfig getSaslConfig() {
-        return saslConfig;
-    }
-
-    public ExceptionHandler getExceptionHandler() {
-        return exceptionHandler;
-    }
-
-    public long getNetworkRecoveryInterval() {
-        return networkRecoveryInterval;
-    }
-
-    public boolean isTopologyRecoveryEnabled() {
-        return topologyRecovery;
-    }
-
-    public ThreadFactory getThreadFactory() {
-    return threadFactory;
-  }
-
-    public void setUsername(String username) {
-        this.username = username;
-    }
-
-    public void setPassword(String password) {
-        this.password = password;
-    }
-
+    
     public void setConsumerWorkServiceExecutor(ExecutorService consumerWorkServiceExecutor) {
         this.consumerWorkServiceExecutor = consumerWorkServiceExecutor;
     }
 
-    public void setVirtualHost(String virtualHost) {
-        this.virtualHost = virtualHost;
+    public void setConnectionFactoryConfig(ConnectionFactory.ConnectionFactoryConfig connectionFactoryConfig) {
+        this.connectionFactoryConfig = connectionFactoryConfig;
+    }
+    
+    public String getUsername() {
+        return connectionFactoryConfig.username;
     }
 
-    public void setClientProperties(Map<String, Object> clientProperties) {
-        this.clientProperties = clientProperties;
+    public String getPassword() {
+        return connectionFactoryConfig.password;
     }
 
-    public void setRequestedFrameMax(int requestedFrameMax) {
-        this.requestedFrameMax = requestedFrameMax;
+    public String getVirtualHost() {
+        return connectionFactoryConfig.virtualHost;
     }
 
-    public void setRequestedChannelMax(int requestedChannelMax) {
-        this.requestedChannelMax = requestedChannelMax;
+    public Map<String, Object> getClientProperties() {
+        return connectionFactoryConfig._clientProperties;
     }
 
-    public void setRequestedHeartbeat(int requestedHeartbeat) {
-        this.requestedHeartbeat = requestedHeartbeat;
+    public int getRequestedFrameMax() {
+        return connectionFactoryConfig.requestedFrameMax;
     }
 
-    public void setShutdownTimeout(int shutdownTimeout) {
-        this.shutdownTimeout = shutdownTimeout;
+    public int getRequestedChannelMax() {
+        return connectionFactoryConfig.requestedChannelMax;
     }
 
-    public void setSaslConfig(SaslConfig saslConfig) {
-        this.saslConfig = saslConfig;
+    public int getRequestedHeartbeat() {
+        return connectionFactoryConfig.requestedHeartbeat;
     }
 
-    public void setNetworkRecoveryInterval(long networkRecoveryInterval) {
-        this.networkRecoveryInterval = networkRecoveryInterval;
+    public int getHandshakeTimeout() {
+        return connectionFactoryConfig.handshakeTimeout;
     }
 
-    public void setTopologyRecovery(boolean topologyRecovery) {
-        this.topologyRecovery = topologyRecovery;
+    public int getShutdownTimeout() {
+        return connectionFactoryConfig.shutdownTimeout;
     }
 
-    public void setExceptionHandler(ExceptionHandler exceptionHandler) {
-        this.exceptionHandler = exceptionHandler;
+    public SaslConfig getSaslConfig() {
+        return connectionFactoryConfig.saslConfig;
     }
 
-    public void setThreadFactory(ThreadFactory threadFactory) {
-        this.threadFactory = threadFactory;
+    public ExceptionHandler getExceptionHandler() {
+        return connectionFactoryConfig.exceptionHandler;
+    }
+
+    public long getNetworkRecoveryInterval() {
+        return connectionFactoryConfig.networkRecoveryInterval;
+    }
+
+    public boolean isTopologyRecoveryEnabled() {
+        return connectionFactoryConfig.topologyRecovery;
+    }
+
+    public ThreadFactory getThreadFactory() {
+        return connectionFactoryConfig.threadFactory;
     }
 
     public ExecutorService getShutdownExecutor() {
-        return shutdownExecutor;
+        return connectionFactoryConfig.shutdownExecutor;
     }
 
-    public void setShutdownExecutor(ExecutorService shutdownExecutor) {
-        this.shutdownExecutor = shutdownExecutor;
+    public FrameHandlerFactory getFrameHandlerFactory() {
+        return connectionFactoryConfig.frameHandlerFactory;
     }
+
 }
